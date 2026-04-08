@@ -1,0 +1,49 @@
+name: legal-contract-redline
+version: "1.0.0"
+description: "RL environment for AI-assisted legal contract redlining and risk identification"
+tasks:
+  - name: easy
+    description: "Binary classification — is the clause risky or safe?"
+    difficulty: 1
+    max_steps: 3
+    reward_range: [0.0, 1.0]
+  - name: medium
+    description: "Classify risk type and extract the risky phrase"
+    difficulty: 2
+    max_steps: 3
+    reward_range: [0.0, 1.0]
+  - name: hard
+    description: "Full redline: classify risk, extract phrase, rewrite clause"
+    difficulty: 3
+    max_steps: 3
+    reward_range: [0.0, 1.0]
+action_space:
+  type: object
+  fields:
+    is_risky: boolean
+    risk_category: "one of: liability, termination, ip_ownership, indemnification, governing_law, safe"
+    risky_phrase: string
+    rewrite: string
+observation_space:
+  type: object
+  fields:
+    clause_id: integer
+    clause_text: string
+    task: string
+    step_number: integer
+    instructions: string
+reward:
+  type: float
+  range: [0.0, 1.0]
+  partial_credit: true
+  description: "Weighted rubric scoring. Partial credit awarded for correct subcategories."
+endpoints:
+  reset: "POST /reset"
+  step: "POST /step"
+  state: "GET /state"
+  health: "GET /health"
+tags:
+  - legal
+  - nlp
+  - contract-review
+  - openenv
