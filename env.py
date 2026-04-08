@@ -1,5 +1,4 @@
-import random
-from pydantic import BaseModel
+from models import Action, Observation, RiskCategory
 
 
 CLAUSES = [
@@ -93,45 +92,78 @@ TASK_INSTRUCTIONS = {
 }
 
 
-class ContractAction(BaseModel):
-    is_risky: bool
-    risk_category: str = "safe"
-    risky_phrase: str = ""
-    rewrite: str = ""
+_AUTO_LABEL_PHRASES = [
+    ("without notice", "termination"),
+    ("without cause", "termination"),
+    ("at no additional cost", "termination"),
+    ("under any circumstances", "liability"),
+    ("not be liable for any damages", "liability"),
+    ("not be liable", "liability"),
+    ("including those arising from the client's own negligence", "indemnification"),
+    ("client's own negligence", "indemnification"),
+    ("indemnify", "indemnification"),
+    ("whether related to the project or not", "ip_ownership"),
+    ("sole property of the client", "ip_ownership"),
+    ("without the contractor's consent", "ip_ownership"),
+    ("assign this agreement to any third party", "ip_ownership"),
+    ("intellectual property", "ip_ownership"),
+    ("binding arbitration", "governing_law"),
+    ("jurisdiction", "governing_law"),
+    ("governing law", "governing_law"),
+]
 
 
-class ContractObservation(BaseModel):
-    clause_id: int
-    clause_text: str
-    task: str
-    step_number: int
-    instructions: str
-
-
-class ContractReward(BaseModel):
-    score: float
-    breakdown: dict
+def auto_label_clause(text: str) -> dict:
+    """Generate ground-truth labels for a custom clause using rule-based detection."""
+    text_lower = text.lower()
+    for phrase, category in _AUTO_LABEL_PHRASES:
+        if phrase in text_lower:
+            start = text_lower.find(phrase)
+            risky_phrase = text[start:start + len(phrase)]
+            return {
+                "id": -1,
+                "text": text,
+                "is_risky": True,
+                "risk_category": category,
+                "risky_phrase": risky_phrase,
+                "safe_rewrite": "",
+            }
+    return {
+        "id": -1,
+        "text": text,
+        "is_risky": False,
+        "risk_category": "safe",
+        "risky_phrase": "",
+        "safe_rewrite": "",
+    }
 
 
 class ContractRedlineEnv:
     MAX_STEPS = 3
 
+    _clause_index: int = 0
+
     def __init__(self, task: str = "easy"):
-        assert task in ("easy", "medium", "hard")
+        if task not in ("easy", "medium", "hard"):
+            raise ValueError("task must be one of: easy, medium, hard")
         self.task = task
-        self.current_clause = None
+        self.current_clause: dict | None = None
         self.step_count = 0
         self.done = False
         self.last_reward = 0.0
         self.episode_rewards: list[float] = []
 
-    def reset(self) -> ContractObservation:
-        self.current_clause = random.choice(CLAUSES)
+    def reset(self, custom_clause_text: str | None = None) -> Observation:
+        if custom_clause_text and custom_clause_text.strip():
+            self.current_clause = auto_label_clause(custom_clause_text.strip())
+        else:
+            self.current_clause = CLAUSES[ContractRedlineEnv._clause_index % len(CLAUSES)]
+            ContractRedlineEnv._clause_index += 1
         self.step_count = 0
         self.done = False
         self.last_reward = 0.0
         self.episode_rewards = []
-        return ContractObservation(
+        return Observation(
             clause_id=self.current_clause["id"],
             clause_text=self.current_clause["text"],
             task=self.task,
@@ -139,26 +171,33 @@ class ContractRedlineEnv:
             instructions=TASK_INSTRUCTIONS[self.task],
         )
 
-    def step(self, action: ContractAction) -> tuple:
+    def step(self, action: Action) -> tuple:
+        if self.done:
+            raise RuntimeError("Episode is done. Call /reset to start a new episode.")
+        if self.current_clause is None:
+            raise RuntimeError("No active episode. Call /reset first.")
+
         self.step_count += 1
-        reward = self._grade(action)
-        self.last_reward = reward.score
-        self.done = reward.score >= 0.8 or self.step_count >= self.MAX_STEPS
-        self.episode_rewards.append(reward.score)
+        reward, breakdown = self._grade(action)
+        self.last_reward = reward
+        self.done = reward >= 0.8 or self.step_count >= self.MAX_STEPS
+        self.episode_rewards.append(reward)
 
-        obs = ContractObservation(
+        obs = Observation(
             clause_id=self.current_clause["id"],
             clause_text=self.current_clause["text"],
             task=self.task,
             step_number=self.step_count,
             instructions=TASK_INSTRUCTIONS[self.task],
         )
-        return (obs, reward.score, self.done, {"breakdown": reward.breakdown})
+        return (obs, reward, self.done, {"breakdown": breakdown})
 
-    def _grade(self, action: ContractAction) -> ContractReward:
+    def _grade(self, action: Action) -> tuple[float, dict]:
         clause = self.current_clause
-        breakdown = {}
+        breakdown: dict[str, float] = {}
         score = 0.0
+
+        cat_value = action.risk_category.value if isinstance(action.risk_category, RiskCategory) else str(action.risk_category).strip().lower()
 
         if self.task == "easy":
             if action.is_risky == clause["is_risky"]:
@@ -169,53 +208,47 @@ class ContractRedlineEnv:
                 breakdown["is_risky"] = 0.0
 
         elif self.task == "medium":
-            # is_risky: +0.3
             if action.is_risky == clause["is_risky"]:
                 breakdown["is_risky"] = 0.3
                 score += 0.3
             else:
                 breakdown["is_risky"] = 0.0
 
-            # risk_category: +0.4
-            if action.risk_category.strip().lower() == clause["risk_category"].lower():
+            if cat_value == clause["risk_category"].lower():
                 breakdown["risk_category"] = 0.4
                 score += 0.4
             else:
                 breakdown["risk_category"] = 0.0
 
-            # risky_phrase: +0.3
             phrase_score = self._score_phrase(action.risky_phrase, clause["risky_phrase"])
             phrase_weighted = round(phrase_score * 0.3, 4)
             breakdown["risky_phrase"] = phrase_weighted
             score += phrase_weighted
 
         elif self.task == "hard":
-            # is_risky: +0.15
             if action.is_risky == clause["is_risky"]:
                 breakdown["is_risky"] = 0.15
                 score += 0.15
             else:
                 breakdown["is_risky"] = 0.0
 
-            # risk_category: +0.25
-            if action.risk_category.strip().lower() == clause["risk_category"].lower():
+            if cat_value == clause["risk_category"].lower():
                 breakdown["risk_category"] = 0.25
                 score += 0.25
             else:
                 breakdown["risk_category"] = 0.0
 
-            # risky_phrase: +0.20
             phrase_score = self._score_phrase(action.risky_phrase, clause["risky_phrase"])
             phrase_weighted = round(phrase_score * 0.20, 4)
             breakdown["risky_phrase"] = phrase_weighted
             score += phrase_weighted
 
-            # rewrite quality: +0.40
             rewrite_score = self._score_rewrite(action.rewrite, clause)
             breakdown["rewrite"] = round(rewrite_score, 4)
             score += rewrite_score
 
-        return ContractReward(score=min(round(score, 4), 1.0), breakdown=breakdown)
+        final_score = min(round(score, 4), 1.0)
+        return final_score, breakdown
 
     def _score_phrase(self, predicted: str, expected: str) -> float:
         if not expected:
@@ -224,14 +257,27 @@ class ContractRedlineEnv:
         pred_lower = predicted.strip().lower()
         exp_lower = expected.strip().lower()
 
-        if exp_lower in pred_lower or pred_lower in exp_lower:
+        if not pred_lower:
+            return 0.0
+
+        if exp_lower == pred_lower:
             return 1.0
 
-        pred_words = set(pred_lower.split())
-        exp_words = set(exp_lower.split())
-        overlap = pred_words & exp_words
-        if len(overlap) >= 3:
+        if exp_lower in pred_lower or pred_lower in exp_lower:
+            return 0.9
+
+        pred_tokens = set(pred_lower.split())
+        exp_tokens = set(exp_lower.split())
+        if not exp_tokens:
+            return 0.0
+        overlap = pred_tokens & exp_tokens
+        overlap_ratio = len(overlap) / len(exp_tokens)
+        if overlap_ratio >= 0.75:
+            return 0.7
+        if overlap_ratio >= 0.5:
             return 0.5
+        if len(overlap) >= 2:
+            return 0.3
 
         return 0.0
 
@@ -247,13 +293,21 @@ class ContractRedlineEnv:
         risky_absent = (
             risky_phrase.lower() not in rewrite_stripped.lower() if risky_phrase else True
         )
+        min_length = word_count >= 5
+
+        if not min_length:
+            return 0.05
 
         if word_count > 20 and risky_absent and differs:
             return 0.40
+        elif word_count > 10 and risky_absent and differs:
+            return 0.30
         elif word_count > 10 and differs:
             return 0.20
-        else:
+        elif differs:
             return 0.10
+        else:
+            return 0.05
 
     def state(self) -> dict:
         return {

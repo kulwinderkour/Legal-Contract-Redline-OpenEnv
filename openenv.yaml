@@ -1,47 +1,106 @@
 name: legal-contract-redline
 version: "1.0.0"
-description: "RL environment for AI-assisted legal contract redlining and risk identification"
+description: "RL environment for AI-assisted legal contract redlining and risk identification. Agents review contract clauses, classify risk, extract risky phrases, and rewrite unsafe language."
+
 tasks:
   - name: easy
     description: "Binary classification — is the clause risky or safe?"
     difficulty: 1
     max_steps: 3
     reward_range: [0.0, 1.0]
+    scoring: "1.0 if is_risky correct, else 0.0"
+
   - name: medium
-    description: "Classify risk type and extract the risky phrase"
+    description: "Classify risk type and extract the specific risky phrase"
     difficulty: 2
     max_steps: 3
     reward_range: [0.0, 1.0]
+    scoring: "Weighted sum: is_risky(0.3) + risk_category(0.4) + risky_phrase(0.3)"
+
   - name: hard
-    description: "Full redline: classify risk, extract phrase, rewrite clause"
+    description: "Full redline: classify risk, extract phrase, and rewrite the clause safely"
     difficulty: 3
     max_steps: 3
     reward_range: [0.0, 1.0]
-action_space:
+    scoring: "Weighted sum: is_risky(0.15) + risk_category(0.25) + risky_phrase(0.20) + rewrite(0.40)"
+
+action_schema:
   type: object
-  fields:
-    is_risky: boolean
-    risk_category: "one of: liability, termination, ip_ownership, indemnification, governing_law, safe"
-    risky_phrase: string
-    rewrite: string
-observation_space:
+  required: [is_risky]
+  properties:
+    is_risky:
+      type: boolean
+      description: "Whether the clause contains risky language"
+    risk_category:
+      type: string
+      enum: [liability, termination, ip_ownership, indemnification, governing_law, safe]
+      default: safe
+      description: "The category of risk identified in the clause"
+    risky_phrase:
+      type: string
+      default: ""
+      maxLength: 1000
+      description: "The exact risky phrase extracted from the clause text"
+    rewrite:
+      type: string
+      default: ""
+      maxLength: 5000
+      description: "A safe rewritten version of the clause"
+
+observation_schema:
   type: object
-  fields:
-    clause_id: integer
-    clause_text: string
-    task: string
-    step_number: integer
-    instructions: string
+  properties:
+    clause_id:
+      type: integer
+      description: "Unique identifier for the clause"
+    clause_text:
+      type: string
+      description: "The full text of the contract clause"
+    task:
+      type: string
+      enum: [easy, medium, hard]
+      description: "Current task level"
+    step_number:
+      type: integer
+      description: "Current step in the episode (0-indexed at reset)"
+    instructions:
+      type: string
+      description: "Task-specific instructions for the agent"
+
 reward:
   type: float
   range: [0.0, 1.0]
   partial_credit: true
-  description: "Weighted rubric scoring. Partial credit awarded for correct subcategories."
+  deterministic: true
+  description: >
+    Weighted rubric scoring with partial credit.
+    Easy: binary match on is_risky.
+    Medium: is_risky(0.3) + category(0.4) + phrase overlap(0.3).
+    Hard: is_risky(0.15) + category(0.25) + phrase(0.20) + rewrite quality(0.40).
+    Phrase scoring uses token overlap ratio.
+    Rewrite scoring checks length, risky phrase removal, and text difference.
+
 endpoints:
   reset: "POST /reset"
   step: "POST /step"
   state: "GET /state"
   health: "GET /health"
+  metrics: "GET /metrics"
+
+environment:
+  variables:
+    - name: HF_TOKEN
+      required: false
+      description: "Hugging Face API token for LLM inference (optional — rule-based baseline works without it)"
+    - name: API_BASE_URL
+      required: false
+      default: "https://router.huggingface.co/v1"
+      description: "Base URL for the LLM API"
+    - name: MODEL_NAME
+      required: false
+      default: "Qwen/Qwen2.5-72B-Instruct"
+      description: "Model to use for inference"
+
 tags:
   - legal
   - nlp

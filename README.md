@@ -13,128 +13,231 @@ tags:
 
 # Legal Contract Redline OpenEnv
 
-## Overview
+Lawyers spend a ridiculous amount of time reading contract clauses and flagging risky language. This project turns that into an RL environment — give it a clause, have an agent analyze it, and get a graded score back. No API keys, no LLM, no setup headaches. Just run it.
 
-Legal contract review is one of the most time-consuming tasks in law — junior lawyers spend thousands of hours reading clauses, flagging risks, and suggesting rewrites. This RL environment simulates that workflow so AI agents can learn to perform **contract redlining**: identifying risky language in draft contracts, classifying the type of risk, and proposing safer alternatives.
+It's a REST API that works with the [OpenEnv spec](https://github.com/open-env). Grading is all rule-based, rewards are always 0–1, and the same input always gives the same output.
 
-**Who it's for:** RL researchers, legal-AI builders, and hackathon participants looking to benchmark language agents on structured legal reasoning tasks.
+---
 
-The environment exposes a simple REST API. An agent receives a contract clause, takes an action (classification + optional rewrite), and receives a graded reward based on a deterministic rubric — no LLM in the grading loop.
+## What It Does
 
-## Tasks
+Your agent gets a contract clause and has to:
 
-| Task | Description | Difficulty | Reward Logic |
-|------|-------------|------------|--------------|
-| **easy** | Binary classification — is the clause risky or safe? | 1 | 1.0 if correct, 0.0 if wrong |
-| **medium** | Classify risk type and extract the specific risky phrase | 2 | Weighted: is_risky (0.3) + category (0.4) + phrase (0.3) |
-| **hard** | Full redline: classify risk, extract phrase, and rewrite the clause | 3 | Weighted: is_risky (0.15) + category (0.25) + phrase (0.20) + rewrite (0.40) |
+1. **Easy** — is the clause risky or safe?
+2. **Medium** — what kind of risk? Which phrase is the problem?
+3. **Hard** — all of the above, plus rewrite the clause to make it safe
 
-## Action Space
+You get up to 3 attempts per episode. Each attempt is graded and scored.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `is_risky` | `boolean` | Whether the clause contains risky language |
-| `risk_category` | `string` | One of: `liability`, `termination`, `ip_ownership`, `indemnification`, `governing_law`, `safe` |
-| `risky_phrase` | `string` | The exact risky phrase extracted from the clause text, or `""` if safe |
-| `rewrite` | `string` | A safe rewritten version of the clause, or `""` if not needed |
+---
 
-## Observation Space
+## Project Files
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `clause_id` | `integer` | Unique identifier for the clause |
-| `clause_text` | `string` | The full text of the contract clause |
-| `task` | `string` | Current task level: `easy`, `medium`, or `hard` |
-| `step_number` | `integer` | Current step in the episode (0-indexed at reset) |
-| `instructions` | `string` | Task-specific instructions for the agent |
+```
+server.py          — FastAPI server, all API endpoints
+env.py             — Environment logic: clauses, grading, rewards
+models.py          — Pydantic models for requests/responses
+inference.py       — Baseline agent (rule-based, no API key needed)
+test_env.py        — Self-test script (44 checks)
+openenv.yaml       — OpenEnv manifest
+Dockerfile         — Docker image for HF Spaces
+requirements.txt   — Python dependencies
+```
 
-## Reward Function
-
-All rewards are in the range **[0.0, 1.0]** with partial credit.
-
-### Easy Task
-- **is_risky correct:** 1.0 — **is_risky wrong:** 0.0
-
-### Medium Task (weighted sum = 1.0)
-- **is_risky correct:** +0.3
-- **risk_category correct:** +0.4
-- **risky_phrase match:** +0.3 (full substring match = 1.0×, partial 3+ word overlap = 0.5×)
-
-### Hard Task (weighted sum = 1.0)
-- **is_risky correct:** +0.15
-- **risk_category correct:** +0.25
-- **risky_phrase match:** +0.20 (same matching logic as medium)
-- **rewrite quality:** +0.40
-  - 0.40 if rewrite >20 words AND risky phrase absent AND differs from original
-  - 0.20 if rewrite >10 words AND differs from original
-  - 0.10 if any non-empty rewrite provided
-  - 0.00 if empty
-
-Episodes end when the agent scores ≥0.8 or after 3 steps.
+---
 
 ## API Endpoints
 
-| Method | Path | Description | Example Body |
-|--------|------|-------------|--------------|
-| `GET` | `/` | Service info and available endpoints | — |
-| `GET` | `/health` | Health check | — |
-| `GET` | `/tasks` | List available tasks with descriptions | — |
-| `POST` | `/reset` | Start a new episode | `{"task": "easy"}` |
-| `POST` | `/step` | Submit an action and receive reward | `{"is_risky": true, "risk_category": "termination", "risky_phrase": "without notice", "rewrite": ""}` |
-| `GET` | `/state` | Get current episode state | — |
+| Method | Path | What it does |
+|--------|------|-------------|
+| `GET` | `/health` | Returns `{"status": "ok"}` |
+| `GET` | `/tasks` | Lists the 3 task levels |
+| `POST` | `/reset` | Starts a new episode, returns a clause |
+| `POST` | `/step` | Submits an action, returns reward + done |
+| `GET` | `/state` | Current episode state |
+| `GET` | `/metrics` | Aggregated scores across all episodes |
 
-## Local Setup
+### POST /reset
+
+Use the built-in dataset:
+```json
+{"task": "easy"}
+```
+
+Or paste your own clause (great for testing with real contracts):
+```json
+{
+  "task": "easy",
+  "clause_text": "Vendor may terminate without notice."
+}
+```
+
+Custom clauses get `clause_id: -1`. The environment auto-labels them using keyword detection so it can still grade your response.
+
+### POST /step
+
+```json
+{
+  "is_risky": true,
+  "risk_category": "termination",
+  "risky_phrase": "without notice",
+  "rewrite": ""
+}
+```
+
+Returns:
+```json
+{
+  "observation": { "clause_id": -1, "clause_text": "...", "task": "easy", "step_number": 1, "instructions": "..." },
+  "reward": 1.0,
+  "done": true,
+  "info": { "breakdown": {"is_risky": 1.0} }
+}
+```
+
+### Error Handling
+
+The API won't crash on bad input. You'll get a clean error instead:
+
+- `/step` before `/reset` → `400`
+- `/step` after episode is done → `400`
+- Invalid `risk_category` → `422`
+- Invalid task name → `422`
+
+---
+
+## Reward Scoring
+
+Rewards are always between 0.0 and 1.0. No randomness involved.
+
+**Easy** — 1.0 if `is_risky` is correct, 0.0 if wrong.
+
+**Medium** — weighted sum:
+- `is_risky` correct: +0.3
+- `risk_category` match: +0.4
+- `risky_phrase` overlap: +0.3
+
+**Hard** — weighted sum:
+- `is_risky` correct: +0.15
+- `risk_category` match: +0.25
+- `risky_phrase` overlap: +0.20
+- Rewrite quality: +0.40
+
+Phrase scoring works on token overlap — exact match gets 1.0, partial overlap gets partial credit. Rewrite scoring checks that the risky phrase is actually gone and the text isn't just copied.
+
+Episodes end when reward ≥ 0.8 or after 3 steps, whichever comes first.
+
+---
+
+## How to Run Locally
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Start the server
 python server.py
-
-# Test health endpoint
-curl http://localhost:7860/health
-
-# Reset with easy task
-curl -X POST http://localhost:7860/reset -H "Content-Type: application/json" -d '{"task":"easy"}'
-
-# Submit a step
-curl -X POST http://localhost:7860/step -H "Content-Type: application/json" -d '{"is_risky":true,"risk_category":"termination","risky_phrase":"without notice","rewrite":""}'
 ```
 
-## Docker
+That's it. Server starts at `http://localhost:7860`. Head to `/docs` to try the API in your browser.
+
+### Run the baseline agent
 
 ```bash
-# Build the image
-docker build -t legal-redline .
-
-# Run the container
-docker run -p 7860:7860 legal-redline
-```
-
-## Inference
-
-The `inference.py` script runs an LLM agent against the environment for all 3 task levels.
-
-```bash
-# Set your HuggingFace token
-export HF_TOKEN=your_token_here
-
-# Run inference (server must be running)
 python inference.py
 ```
 
-The script outputs structured logs in the format:
+No API key needed. It uses keyword matching to classify risk. Output looks like:
+
 ```
-[START] task=easy env=legal-redline model=Qwen/Qwen2.5-72B-Instruct
+[START] task=easy env=legal-redline model=baseline
 [STEP] step=1 action=is_risky=True,category=termination reward=1.00 done=true error=null
 [END] success=true steps=1 score=1.00 rewards=1.00
 ```
 
-## Baseline Scores
+If you set `HF_TOKEN`, it'll use an LLM instead. If the LLM fails for any reason, it falls back to rule-based automatically — so it never crashes.
 
-| Task | Avg Score | Success Rate |
-|------|-----------|--------------|
-| easy | 0.85 | 80% |
-| medium | 0.62 | 55% |
-| hard | 0.48 | 35% |
+### Run the self-test
+
+```bash
+python test_env.py
+```
+
+Runs 44 checks — endpoints, error codes, reward ranges, custom clauses. If something's wrong, you'll know immediately.
+
+---
+
+## Custom Clause Support
+
+This is probably the most fun part to play with. You can paste any contract clause into `/reset` and the environment will grade it:
+
+```json
+{
+  "task": "medium",
+  "clause_text": "The vendor shall not be liable for any damages under any circumstances."
+}
+```
+
+Then call `/step` with your analysis. The environment figures out the "right answer" using keyword matching.
+
+Here are some good ones to try:
+
+| Clause | Expected |
+|--------|----------|
+| `"Vendor may terminate without notice."` | risky / termination |
+| `"The vendor shall not be liable under any circumstances."` | risky / liability |
+| `"The contractor shall indemnify the client against all claims."` | risky / indemnification |
+| `"Payment is due within 30 days."` | safe |
+
+---
+
+## Docker / Hugging Face Spaces
+
+```bash
+docker build -t legal-redline .
+docker run -p 7860:7860 legal-redline
+```
+
+Uses `python:3.11-slim`, non-root user, port 7860 — standard HF Spaces setup.
+
+To deploy: push to a Hugging Face Space with Docker SDK selected. The frontmatter at the top of this file configures it automatically.
+
+---
+
+## Environment Variables
+
+All optional. The server runs fine with zero config.
+
+| Variable | Default | What it does |
+|----------|---------|-------------|
+| `HF_TOKEN` | — | Enables LLM mode in `inference.py` |
+| `API_BASE_URL` | `https://router.huggingface.co/v1` | LLM API endpoint |
+| `MODEL_NAME` | `Qwen/Qwen2.5-72B-Instruct` | Which model to use |
+| `ENV_URL` | `http://localhost:7860` | Where the server is running |
+
+---
+
+## What Makes This Different
+
+- **No API keys required.** Everything works offline, right out of the box.
+- **Paste any clause.** Judges can try their own contract text and get graded instantly.
+- **Fully reproducible.** Same input, same output, every time.
+- **Partial credit.** You don't just get right/wrong — close answers get partial scores.
+- **Won't crash.** Bad input gives you a proper error code, not a stack trace.
+
+---
+
+## Quick Judge Testing Guide
+
+The fastest way to see what this does:
+
+1. `python server.py`
+2. Open `http://localhost:7860/docs`
+3. Hit `POST /reset` with `{"task": "easy"}`
+4. Or try your own clause: `{"task": "easy", "clause_text": "Vendor may terminate without notice."}`
+5. Hit `POST /step` with `{"is_risky": true, "risk_category": "termination"}`
+6. Run `python inference.py` to watch the baseline agent go
+7. Run `python test_env.py` to make sure everything passes
+
+---
+
+## License
+
+Built for the OpenEnv hackathon. Free to use for research and experimentation.
