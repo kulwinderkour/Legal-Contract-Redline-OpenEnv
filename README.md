@@ -17,11 +17,11 @@ tags:
 
 Try the environment here:
 
-👉 https://kulludon123-legal-contract-redline.hf.space
+👉 https://kulwinder1491-legal-contract-redline.hf.space
 
 Test it using the interactive API:
 
-👉 https://kulludon123-legal-contract-redline.hf.space/docs
+👉 https://kulwinder1491-legal-contract-redline.hf.space/docs
 
 No setup needed — just open /docs and start testing.
 
