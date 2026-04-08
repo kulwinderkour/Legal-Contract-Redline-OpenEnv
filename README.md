@@ -13,6 +13,18 @@ tags:
 
 # Legal Contract Redline OpenEnv
 
+## 🌐 Live Demo
+
+Try the environment here:
+
+👉 https://kulludon123-legal-contract-redline.hf.space
+
+Test it using the interactive API:
+
+👉 https://kulludon123-legal-contract-redline.hf.space/docs
+
+No setup needed — just open /docs and start testing.
+
 Lawyers spend a ridiculous amount of time reading contract clauses and flagging risky language. This project turns that into an RL environment — give it a clause, have an agent analyze it, and get a graded score back. No API keys, no LLM, no setup headaches. Just run it.
 
 It's a REST API that works with the [OpenEnv spec](https://github.com/open-env). Grading is all rule-based, rewards are always 0–1, and the same input always gives the same output.
@@ -217,6 +229,7 @@ All optional. The server runs fine with zero config.
 ## What Makes This Different
 
 - **No API keys required.** Everything works offline, right out of the box.
+- **Fully local + deterministic.** Works even without internet — everything runs locally and gives the same result every time.
 - **Paste any clause.** Judges can try their own contract text and get graded instantly.
 - **Fully reproducible.** Same input, same output, every time.
 - **Partial credit.** You don't just get right/wrong — close answers get partial scores.
@@ -232,12 +245,15 @@ The fastest way to see what this does:
 2. Open `http://localhost:7860/docs`
 3. Hit `POST /reset` with `{"task": "easy"}`
 4. Or try your own clause: `{"task": "easy", "clause_text": "Vendor may terminate without notice."}`
-5. Hit `POST /step` with `{"is_risky": true, "risk_category": "termination"}`
-6. Run `python inference.py` to watch the baseline agent go
-7. Run `python test_env.py` to make sure everything passes
+5. 👉 You can also paste your own contract clause using the `clause_text` field in `/reset`.
+6. Hit `POST /step` with `{"is_risky": true, "risk_category": "termination"}`
+7. Run `python inference.py` to watch the baseline agent go
+8. Run `python test_env.py` to make sure everything passes
 
 ---
 
 ## License
 
 Built for the OpenEnv hackathon. Free to use for research and experimentation.
+
+> If something breaks, just run `test_env.py` — it will quickly show what's wrong.
