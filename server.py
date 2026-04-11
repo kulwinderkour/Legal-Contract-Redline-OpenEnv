@@ -49,8 +49,10 @@ def tasks():
 
 
 @app.post("/reset")
-def reset(req: ResetRequest):
+def reset(req: ResetRequest | None = None):
     global _env
+    if req is None:
+        req = ResetRequest()
     try:
         _env = ContractRedlineEnv(task=req.task)
         obs = _env.reset(custom_clause_text=req.clause_text)
