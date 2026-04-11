@@ -99,7 +99,6 @@ def step(req: Action):
 
 @app.get("/state")
 def state():
-    global _env
     if _env is None:
         return {"status": "no active episode"}
     return _env.state()

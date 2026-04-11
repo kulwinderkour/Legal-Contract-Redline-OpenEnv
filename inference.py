@@ -13,9 +13,7 @@ BENCHMARK = "legal-redline"
 TASKS = ["easy", "medium", "hard"]
 MAX_STEPS = 3
 
-# ---------------------------------------------------------------------------
-# Mode detection: LLM if HF_TOKEN is set, otherwise deterministic rule-based
-# ---------------------------------------------------------------------------
+# use LLM if we have a token, otherwise stick with rules
 USE_LLM = bool(HF_TOKEN)
 _llm_client = None
 
@@ -40,9 +38,8 @@ The JSON must have these fields:
 Example response:
 {"is_risky": true, "risk_category": "liability", "risky_phrase": "under any circumstances", "rewrite": "The vendor liability shall not exceed total fees paid in the prior 12 months."}"""
 
-# ---------------------------------------------------------------------------
-# Rule-based agent (deterministic, zero-dependency)
-# ---------------------------------------------------------------------------
+# --- rule-based fallback ---
+
 _RISK_PHRASES = [
     ("without notice", "termination"),
     ("without cause", "termination"),
@@ -93,9 +90,6 @@ def _rule_based_agent(clause_text: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# LLM agent (optional, only when HF_TOKEN is available)
-# ---------------------------------------------------------------------------
 def _ask_llm(clause_text: str, instructions: str) -> dict:
     if _llm_client is None:
         raise RuntimeError("LLM client not available")
@@ -114,9 +108,7 @@ def _ask_llm(clause_text: str, instructions: str) -> dict:
     return json.loads(raw)
 
 
-# ---------------------------------------------------------------------------
-# Unified agent dispatcher with automatic fallback
-# ---------------------------------------------------------------------------
+# pick LLM or rules, auto-fallback on error
 def get_action(clause_text: str, instructions: str) -> tuple:
     """Returns (action_dict, error_string). error_string is 'null' on success."""
     if USE_LLM:
@@ -131,9 +123,6 @@ def get_action(clause_text: str, instructions: str) -> tuple:
     return _rule_based_agent(clause_text), "null"
 
 
-# ---------------------------------------------------------------------------
-# Environment HTTP client
-# ---------------------------------------------------------------------------
 def call_env(method: str, path: str, body: dict | None = None) -> dict:
     url = f"{ENV_URL}{path}"
     if method == "GET":
@@ -144,9 +133,7 @@ def call_env(method: str, path: str, body: dict | None = None) -> dict:
     return r.json()
 
 
-# ---------------------------------------------------------------------------
-# Task runner with strict log format
-# ---------------------------------------------------------------------------
+# main loop — runs one task end-to-end
 def run_task(task_name: str) -> None:
     rewards: list[float] = []
     final_score = 0.0
