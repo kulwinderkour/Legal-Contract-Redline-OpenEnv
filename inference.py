@@ -13,7 +13,13 @@ BENCHMARK = "legal-redline"
 TASKS = ["easy", "medium", "hard"]
 MAX_STEPS = 3
 
-_llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY or "n/a")
+_llm_client = None
+if API_KEY:
+    try:
+        _llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    except Exception:
+        pass
+
 AGENT_LABEL = MODEL_NAME
 
 SYSTEM_PROMPT = """You are a legal contract reviewer. You will be given a contract clause and a task.
@@ -98,14 +104,16 @@ def _ask_llm(clause_text: str, instructions: str) -> dict:
 
 def get_action(clause_text: str, instructions: str) -> tuple:
     """Always try LLM first, fall back to rules if anything goes wrong."""
-    try:
-        action = _ask_llm(clause_text, instructions)
-        if not isinstance(action.get("is_risky"), bool):
-            raise ValueError("bad is_risky from LLM")
-        return action, "null"
-    except Exception as e:
-        err = str(e).replace("\n", " ")[:120]
-        return _rule_based_agent(clause_text), err
+    if _llm_client:
+        try:
+            action = _ask_llm(clause_text, instructions)
+            if not isinstance(action.get("is_risky"), bool):
+                raise ValueError("bad is_risky from LLM")
+            return action, "null"
+        except Exception as e:
+            err = str(e).replace("\n", " ")[:120]
+            return _rule_based_agent(clause_text), err
+    return _rule_based_agent(clause_text), "null"
 
 
 def call_env(method: str, path: str, body: dict | None = None) -> dict:
