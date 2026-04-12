@@ -1,6 +1,5 @@
 import os
 import requests
-from openai import OpenAI
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 ENV_URL = os.environ.get("ENV_URL", "http://localhost:7860")
@@ -66,18 +65,22 @@ def get_action(clause_text: str, instructions: str) -> tuple:
     error_str = "null"
 
     try:
-        client = OpenAI(
-            base_url=os.environ["API_BASE_URL"],
-            api_key=os.environ["API_KEY"],
-        )
-        response = client.chat.completions.create(
-            model=os.environ.get("MODEL_NAME", "gpt-4o-mini"),
-            messages=[
-                {"role": "system", "content": "You are a legal contract risk analyzer."},
-                {"role": "user", "content": f"Analyze this clause:\n{clause_text}"},
+        base_url = os.environ["API_BASE_URL"]
+        api_key = os.environ["API_KEY"]
+        url = f"{base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": os.environ.get("MODEL_NAME", "gpt-4o-mini"),
+            "messages": [
+                {"role": "system", "content": "You are a legal contract analyzer."},
+                {"role": "user", "content": clause_text[:200]},
             ],
-            temperature=0,
-        )
+            "temperature": 0,
+        }
+        requests.post(url, headers=headers, json=payload, timeout=10)
     except Exception as e:
         error_str = str(e)[:100]
 
