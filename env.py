@@ -247,7 +247,7 @@ class ContractRedlineEnv:
             breakdown["rewrite"] = round(rewrite_score, 4)
             score += rewrite_score
 
-        final_score = min(round(score, 4), 1.0)
+        final_score = max(0.01, min(round(score, 4), 0.99))
         return final_score, breakdown
 
     def _score_phrase(self, predicted: str, expected: str) -> float:
