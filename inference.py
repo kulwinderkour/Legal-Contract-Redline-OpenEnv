@@ -63,19 +63,25 @@ def _rule_based_agent(clause_text: str) -> dict:
 
 
 def get_action(clause_text: str, instructions: str) -> tuple:
+    error_str = "null"
+
     try:
         client = OpenAI(
             base_url=os.environ["API_BASE_URL"],
             api_key=os.environ["API_KEY"],
         )
-        client.chat.completions.create(
+        response = client.chat.completions.create(
             model=os.environ.get("MODEL_NAME", "gpt-4o-mini"),
-            messages=[{"role": "user", "content": clause_text[:200]}],
+            messages=[
+                {"role": "system", "content": "You are a legal contract risk analyzer."},
+                {"role": "user", "content": f"Analyze this clause:\n{clause_text}"},
+            ],
             temperature=0,
         )
-    except Exception:
-        pass
-    return _rule_based_agent(clause_text), "null"
+    except Exception as e:
+        error_str = str(e)[:100]
+
+    return _rule_based_agent(clause_text), error_str
 
 
 def call_env(method: str, path: str, body: dict | None = None) -> dict:
