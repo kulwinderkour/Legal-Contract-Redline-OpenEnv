@@ -3,28 +3,18 @@ import json
 import requests
 from openai import OpenAI
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN = os.getenv("HF_TOKEN")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+API_KEY = os.environ.get("API_KEY", os.environ.get("HF_TOKEN", ""))
+MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 
-ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
+ENV_URL = os.environ.get("ENV_URL", "http://localhost:7860")
 
 BENCHMARK = "legal-redline"
 TASKS = ["easy", "medium", "hard"]
 MAX_STEPS = 3
 
-# use LLM if we have a token, otherwise stick with rules
-USE_LLM = bool(HF_TOKEN)
-_llm_client = None
-
-if USE_LLM:
-    try:
-        _llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
-    except Exception:
-        USE_LLM = False
-        _llm_client = None
-
-AGENT_LABEL = MODEL_NAME if USE_LLM else "baseline"
+_llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY or "n/a")
+AGENT_LABEL = MODEL_NAME
 
 SYSTEM_PROMPT = """You are a legal contract reviewer. You will be given a contract clause and a task.
 You must respond ONLY with a valid JSON object. No explanation, no markdown, no extra text.
@@ -91,8 +81,6 @@ def _rule_based_agent(clause_text: str) -> dict:
 
 
 def _ask_llm(clause_text: str, instructions: str) -> dict:
-    if _llm_client is None:
-        raise RuntimeError("LLM client not available")
     user_msg = f"Instructions: {instructions}\n\nClause to review:\n{clause_text}"
     response = _llm_client.chat.completions.create(
         model=MODEL_NAME,
@@ -101,26 +89,23 @@ def _ask_llm(clause_text: str, instructions: str) -> dict:
             {"role": "user", "content": user_msg},
         ],
         max_tokens=512,
-        temperature=0.0,
+        temperature=0,
     )
     raw = response.choices[0].message.content.strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
     return json.loads(raw)
 
 
-# pick LLM or rules, auto-fallback on error
 def get_action(clause_text: str, instructions: str) -> tuple:
-    """Returns (action_dict, error_string). error_string is 'null' on success."""
-    if USE_LLM:
-        try:
-            action = _ask_llm(clause_text, instructions)
-            if not isinstance(action.get("is_risky"), bool):
-                raise ValueError("LLM returned invalid is_risky")
-            return action, "null"
-        except Exception as e:
-            err = str(e).replace("\n", " ")[:120]
-            return _rule_based_agent(clause_text), err
-    return _rule_based_agent(clause_text), "null"
+    """Always try LLM first, fall back to rules if anything goes wrong."""
+    try:
+        action = _ask_llm(clause_text, instructions)
+        if not isinstance(action.get("is_risky"), bool):
+            raise ValueError("bad is_risky from LLM")
+        return action, "null"
+    except Exception as e:
+        err = str(e).replace("\n", " ")[:120]
+        return _rule_based_agent(clause_text), err
 
 
 def call_env(method: str, path: str, body: dict | None = None) -> dict:
