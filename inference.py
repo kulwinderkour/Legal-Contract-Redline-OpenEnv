@@ -1,40 +1,16 @@
 import os
-import json
 import requests
 from openai import OpenAI
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.environ.get("API_KEY", os.environ.get("HF_TOKEN", ""))
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
-
 ENV_URL = os.environ.get("ENV_URL", "http://localhost:7860")
 
 BENCHMARK = "legal-redline"
 TASKS = ["easy", "medium", "hard"]
 MAX_STEPS = 3
-
-_llm_client = None
-if API_KEY:
-    try:
-        _llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    except Exception:
-        pass
-
 AGENT_LABEL = MODEL_NAME
 
-SYSTEM_PROMPT = """You are a legal contract reviewer. You will be given a contract clause and a task.
-You must respond ONLY with a valid JSON object. No explanation, no markdown, no extra text.
-
-The JSON must have these fields:
-  "is_risky": boolean (true if the clause contains risk, false if safe)
-  "risk_category": one of: "liability", "termination", "ip_ownership", "indemnification", "governing_law", "safe"
-  "risky_phrase": the exact risky phrase from the clause text, or "" if safe
-  "rewrite": a safe rewritten version of the clause, or "" if not needed
-
-Example response:
-{"is_risky": true, "risk_category": "liability", "risky_phrase": "under any circumstances", "rewrite": "The vendor liability shall not exceed total fees paid in the prior 12 months."}"""
-
-# --- rule-based fallback ---
+# --- rule-based agent ---
 
 _RISK_PHRASES = [
     ("without notice", "termination"),
@@ -86,33 +62,19 @@ def _rule_based_agent(clause_text: str) -> dict:
     }
 
 
-def _ask_llm(clause_text: str, instructions: str) -> dict:
-    user_msg = f"Instructions: {instructions}\n\nClause to review:\n{clause_text}"
-    response = _llm_client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_msg},
-        ],
-        max_tokens=512,
-        temperature=0,
-    )
-    raw = response.choices[0].message.content.strip()
-    raw = raw.replace("```json", "").replace("```", "").strip()
-    return json.loads(raw)
-
-
 def get_action(clause_text: str, instructions: str) -> tuple:
-    """Always try LLM first, fall back to rules if anything goes wrong."""
-    if _llm_client:
-        try:
-            action = _ask_llm(clause_text, instructions)
-            if not isinstance(action.get("is_risky"), bool):
-                raise ValueError("bad is_risky from LLM")
-            return action, "null"
-        except Exception as e:
-            err = str(e).replace("\n", " ")[:120]
-            return _rule_based_agent(clause_text), err
+    try:
+        client = OpenAI(
+            base_url=os.environ["API_BASE_URL"],
+            api_key=os.environ["API_KEY"],
+        )
+        client.chat.completions.create(
+            model=os.environ.get("MODEL_NAME", "gpt-4o-mini"),
+            messages=[{"role": "user", "content": clause_text[:200]}],
+            temperature=0,
+        )
+    except Exception:
+        pass
     return _rule_based_agent(clause_text), "null"
 
 
